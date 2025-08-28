@@ -5,14 +5,9 @@ set -u
 # Define variables
 APP_NAME="joydx"
 REPO_OWNER="joy-dx"
-REPO_NAME="desktop"
+REPO_NAME="joydx-releases"
 LATEST_VERSION_URL="https://joydx.com/info/latest-version"
-
-# Function to display error and exit
-abort() {
-  echo "Error: $1" >&2
-  exit 1
-}
+LATEST_VERSION="v0.17.0-rc1"
 
 # Fail fast with a concise message when not using bash
 # Single brackets are needed here for POSIX compatibility
@@ -21,16 +16,25 @@ if [ -z "${BASH_VERSION:-}" ]
 then
   abort "Bash is required to interpret this script."
 fi
+
 if [[ -t 1 ]]; then
   tty_escape() { printf "\033[%sm" "$1"; }
 else
   tty_escape() { :; }
 fi
+
+# Function to display error and exit
+abort() {
+  echo "Error: $1" >&2
+  exit 1
+}
+
 tty_mkbold() { tty_escape "1;$1"; }
 tty_blue="$(tty_mkbold 34)"
 tty_red="$(tty_mkbold 31)"
 tty_bold="$(tty_mkbold 39)"
 tty_reset="$(tty_escape 0)"
+
 shell_join() {
   local arg
   printf "%s" "$1"
@@ -39,6 +43,13 @@ shell_join() {
     printf " "
     printf "%s" "${arg// /\ }"
   done
+}
+
+major_minor() {
+  echo "${1%%.*}.$(
+    x="${1#*.}"
+    echo "${x%%.*}"
+  )"
 }
 
 chomp() {
@@ -92,6 +103,11 @@ detect_os_and_arch() {
     ohai "Detected macOS"
     macos_version="$(major_minor "$(/usr/bin/sw_vers -productVersion)")"
     ohai "macOS Version: ${macos_version}"
+    case "${ARCH}" in
+    arm64)
+      ARCH="aarch64"
+      ;;
+    esac
     ;;
   *)
     error_exit "Unsupported operating system: ${OS}"
@@ -129,89 +145,102 @@ check_curl() {
   fi
 }
 
-# Main script execution starts here
-detect_os_and_arch
-check_curl
-find_install_path
-
-ohai "Fetching latest version from ${LATEST_VERSION_URL}..."
-LATEST_VERSION=$(retry 3 curl -s "${LATEST_VERSION_URL}")
-if [ -z "${LATEST_VERSION}" ]; then
-  error_exit "Failed to retrieve the latest version from ${LATEST_VERSION_URL}"
-fi
-ohai "Latest version available: ${LATEST_VERSION}"
-
-# 5. Download and install
-case "${OS}" in
-Linux)
-  # Determine architecture for download
-  case "${ARCH}" in
-  x86_64)
-    DOWNLOAD_ARCH="x86-64"
-    ;;
-  aarch64)
-    DOWNLOAD_ARCH="aarch64"
-    ;;
-  *)
-    error_exit "Unsupported Linux architecture: ${ARCH}"
-    ;;
-  esac
-
-  # Determine WebKit dependency string for download based on distribution
-  # This is a simplification. A more robust solution might involve checking
-  # specific library versions or using a more sophisticated detection method.
-  WEBKIT_DOWNLOAD_SUFFIX=""
-  if [[ "${DISTRO}" == "debian" || "${DISTRO}" == "ubuntu" ]]; then
-    if version_ge "$VERSION" "22.04"; then
-      WEBKIT_DOWNLOAD_SUFFIX="wk4-1"
-    else
-      WEBKIT_DOWNLOAD_SUFFIX="wk4-0"
+find_latest_version() {
+    ohai "Fetching latest version from ${LATEST_VERSION_URL}..."
+    LATEST_VERSION=$(retry 3 curl -s "${LATEST_VERSION_URL}")
+    if [ -z "${LATEST_VERSION}" ]; then
+      error_exit "Failed to retrieve the latest version from ${LATEST_VERSION_URL}"
     fi
-  elif [[ "${DISTRO}" == "fedora" || "${DISTRO}" == "centos" || "${DISTRO}" == "rhel" || "${DISTRO}" == "almalinux" || "${DISTRO}" == "rocky" ]]; then
-    WEBKIT_DOWNLOAD_SUFFIX="wk4-0"
-  elif [[ "${DISTRO}" == "arch" ]]; then
-    WEBKIT_DOWNLOAD_SUFFIX="wk4-1"
-  else
-    warn "Could not definitively determine WebKit suffix for distribution '${DISTRO}'. Defaulting to wk4-1."
-    WEBKIT_DOWNLOAD_SUFFIX="wk4-1"
-  fi
+    ohai "Latest version available: ${LATEST_VERSION}"
+}
 
-  FILENAME="${APP_NAME}-linux-${DOWNLOAD_ARCH}-${WEBKIT_DOWNLOAD_SUFFIX}-${LATEST_VERSION}"
-  DOWNLOAD_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${LATEST_VERSION}/${FILENAME}"
+download_distribution() {
+  # 5. Download and install
+    case "${OS}" in
+    Linux)
+      # Determine architecture for download
+      case "${ARCH}" in
+      x86_64)
+        DOWNLOAD_ARCH="x86-64"
+        ;;
+      aarch64)
+        DOWNLOAD_ARCH="aarch64"
+        ;;
+      *)
+        error_exit "Unsupported Linux architecture: ${ARCH}"
+        ;;
+      esac
 
-  ohai "Downloading ${FILENAME} to ${INSTALL_PATH}..."
-  if retry 3 curl -L "${DOWNLOAD_URL}" -o "${INSTALL_PATH}/${APP_NAME}"; then
-    execute chmod +x "${INSTALL_PATH}/${APP_NAME}"
-    ohai "Installation complete. You can now run '${APP_NAME}' from your terminal."
-  else
-    error_exit "Failed to download ${FILENAME} from ${DOWNLOAD_URL}"
-  fi
-  ;;
-Darwin)
-  case "${ARCH}" in
-  x86_64)
-    DOWNLOAD_ARCH="x86-64"
-    ;;
-  aarch64)
-    DOWNLOAD_ARCH="aarch64"
-    ;;
-  *)
-    error_exit "Unsupported macOS architecture: ${ARCH}"
-    ;;
-  esac
+      # Determine WebKit dependency string for download based on distribution
+      # This is a simplification. A more robust solution might involve checking
+      # specific library versions or using a more sophisticated detection method.
+      WEBKIT_DOWNLOAD_SUFFIX=""
+      if [[ "${DISTRO}" == "debian" || "${DISTRO}" == "ubuntu" ]]; then
+        if version_ge "$VERSION" "22.04"; then
+          WEBKIT_DOWNLOAD_SUFFIX="webkit41"
+        else
+          WEBKIT_DOWNLOAD_SUFFIX="webkit40"
+        fi
+      elif [[ "${DISTRO}" == "fedora" || "${DISTRO}" == "centos" || "${DISTRO}" == "rhel" || "${DISTRO}" == "almalinux" || "${DISTRO}" == "rocky" ]]; then
+        WEBKIT_DOWNLOAD_SUFFIX="webkit40"
+      elif [[ "${DISTRO}" == "arch" ]]; then
+        WEBKIT_DOWNLOAD_SUFFIX="webkit41"
+      else
+        warn "Could not definitively determine WebKit suffix for distribution '${DISTRO}'. Defaulting to webkit41."
+        WEBKIT_DOWNLOAD_SUFFIX="webkit41"
+      fi
 
-  # For macOS, the download filename is simpler
-  FILENAME="${APP_NAME}-darwin-${DOWNLOAD_ARCH}-${LATEST_VERSION}.app"
-  DOWNLOAD_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${LATEST_VERSION}/${FILENAME}"
+      FILENAME="${APP_NAME}-linux-${DOWNLOAD_ARCH}-${WEBKIT_DOWNLOAD_SUFFIX}-${LATEST_VERSION}"
+      DOWNLOAD_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${LATEST_VERSION}/${FILENAME}"
 
-  ohai "Downloading ${FILENAME}..."
-  if retry 3 curl -L "${DOWNLOAD_URL}" -o "$HOME/Downloads/${FILENAME}"; then
-    ohai "Download complete. To install, drag and drop '$HOME/Downloads/${FILENAME}' into your Applications folder."
-    ohai "You can find your Applications folder in Finder, usually on the left sidebar."
-  else
-    error_exit "Failed to download ${FILENAME} from ${DOWNLOAD_URL}"
-  fi
-  ;;
-esac
+      ohai "Downloading ${FILENAME} to ${INSTALL_PATH}..."
+      if retry 3 curl -L "${DOWNLOAD_URL}" -o "${INSTALL_PATH}/${APP_NAME}"; then
+        execute chmod +x "${INSTALL_PATH}/${APP_NAME}"
+        ohai "Installation complete. You can now run '${APP_NAME}' from your terminal."
+      else
+        error_exit "Failed to download ${FILENAME} from ${DOWNLOAD_URL}"
+      fi
+      ;;
+    Darwin)
+      case "${ARCH}" in
+      x86_64)
+        DOWNLOAD_ARCH="x86-64"
+        ;;
+      aarch64)
+        DOWNLOAD_ARCH="aarch64"
+        ;;
+      *)
+        abort "Unsupported macOS architecture: ${ARCH}"
+        ;;
+      esac
 
-ohai "Script finished successfully!"
+      # For macOS, the download filename is simpler
+      FILENAME="${APP_NAME}-darwin-${DOWNLOAD_ARCH}-${LATEST_VERSION}"
+      DOWNLOAD_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${LATEST_VERSION}/${FILENAME}.tar.gz"
+      ohai "Downloading ${FILENAME}"
+      ohai "From ${DOWNLOAD_URL}"
+      if retry 3 curl -L "${DOWNLOAD_URL}" -o "$HOME/Downloads/${FILENAME}.tar.gz"; then
+        ohai "Download complete. To install, drag and drop '$HOME/Downloads/${FILENAME}' into your Applications folder."
+        ohai "You can find your Applications folder in Finder, usually on the left sidebar."
+        cd "$HOME/Downloads" || abort "cannot go to downloads path"
+        tar -xvf ${FILENAME}.tar.gz
+        mv  ${FILENAME} /Applications/joydx.app
+      else
+        error_exit "Failed to download ${FILENAME} from ${DOWNLOAD_URL}"
+      fi
+      ;;
+    esac
+}
+
+main() {
+  # Main script execution starts here
+  detect_os_and_arch
+  check_curl
+  find_install_path
+  find_latest_version
+  download_distribution
+
+  ohai "Script finished successfully!"
+}
+
+main
