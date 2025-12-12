@@ -5,7 +5,7 @@ set -u
 # Define variables
 APP_NAME="joydx"
 DOWNLOAD_URL_PREFIX="https://github.com/joy-dx/joydx-releases/releases/download/v"
-LATEST_VERSION_URL="http://localhost:19850/joydx/latest-version"
+LATEST_VERSION_URL="https://joydx.com/latest-version"
 REMOTE_ICON_URL="https://joydx.com/icon-square.svg"
 JOYDX_PLATFORM=""
 JOYDX_ARCHITECTURE=""
