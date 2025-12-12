@@ -4,10 +4,12 @@ set -u
 
 # Define variables
 APP_NAME="joydx"
-REPO_OWNER="joy-dx"
-REPO_NAME="joydx-releases"
-LATEST_VERSION_URL="https://joydx.com/info/latest-version"
-LATEST_VERSION="v0.17.0-rc1"
+DOWNLOAD_URL_PREFIX="https://github.com/joy-dx/joydx-releases/releases/download/v"
+LATEST_VERSION_URL="http://localhost:19850/joydx/latest-version"
+REMOTE_ICON_URL="https://joydx.com/icon-square.svg"
+JOYDX_PLATFORM=""
+JOYDX_ARCHITECTURE=""
+DOWNLOAD_SUFFIX=""
 
 # Fail fast with a concise message when not using bash
 # Single brackets are needed here for POSIX compatibility
@@ -80,6 +82,43 @@ retry() {
   fi
 }
 
+create_desktop_entry() {
+  DESKTOP_FILE="${HOME}/.local/share/applications/${APP_NAME}.desktop"
+  ICON_PATH="${HOME}/.local/share/icons/hicolor/scalable/apps/${APP_NAME}.svg"
+  mkdir -p "$(dirname "${DESKTOP_FILE}")"
+  mkdir -p "$(dirname "${ICON_PATH}")"
+
+  cat > "${DESKTOP_FILE}" <<EOF
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=JoyDX
+Comment=Supercharge your Developer Experience
+Exec=${INSTALL_PATH}/${APP_NAME}
+Icon=${APP_NAME}
+Terminal=false
+Categories=Development;
+EOF
+
+  # Make sure permissions are right
+  chmod 644 "${DESKTOP_FILE}"
+  if retry 3 curl -L "${REMOTE_ICON_URL}" -o "${ICON_PATH}"; then
+    ohai "Icon Downloaded"
+  else
+    error_exit "Failed to download icon ${REMOTE_ICON_URL}"
+  fi
+
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "$(dirname "${DESKTOP_FILE}")" >/dev/null 2>&1 || true
+  fi
+
+  if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache ~/.local/share/icons/hicolor >/dev/null 2>&1 || true
+  fi
+
+  ohai "Desktop entry created at ${DESKTOP_FILE}"
+}
+
 detect_os_and_arch() {
   OS=$(uname -s)
   ARCH=$(uname -m)
@@ -89,6 +128,7 @@ detect_os_and_arch() {
 
   case "${OS}" in
   Linux)
+    JOYDX_PLATFORM="linux"
     if [[ -f "/etc/os-release" ]]; then
       . /etc/os-release
       DISTRO=${ID}
@@ -100,17 +140,25 @@ detect_os_and_arch() {
     fi
     ;;
   Darwin)
-    ohai "Detected macOS"
+    JOYDX_PLATFORM="darwin"
     macos_version="$(major_minor "$(/usr/bin/sw_vers -productVersion)")"
-    ohai "macOS Version: ${macos_version}"
-    case "${ARCH}" in
-    arm64)
-      ARCH="aarch64"
-      ;;
-    esac
+    ohai "MacOS Version: ${macos_version}"
     ;;
   *)
     error_exit "Unsupported operating system: ${OS}"
+    ;;
+  esac
+
+  # Determine architecture for download
+  case "${ARCH}" in
+  x86_64)
+    JOYDX_ARCHITECTURE="amd64"
+    ;;
+  arm64)
+    JOYDX_ARCHITECTURE="arm64"
+    ;;
+  *)
+    error_exit "Unsupported architecture: ${ARCH}"
     ;;
   esac
 }
@@ -147,96 +195,113 @@ check_curl() {
 
 find_latest_version() {
     ohai "Fetching latest version from ${LATEST_VERSION_URL}..."
-    LATEST_VERSION=$(retry 3 curl -s "${LATEST_VERSION_URL}")
-    if [ -z "${LATEST_VERSION}" ]; then
-      error_exit "Failed to retrieve the latest version from ${LATEST_VERSION_URL}"
+
+    # Fetch the JSON payload
+    local payload
+    payload=$(retry 3 curl -s "${LATEST_VERSION_URL}") || {
+        error_exit "Failed to retrieve data from ${LATEST_VERSION_URL}"
+    }
+
+    # Verify we got something
+    if [ -z "${payload}" ]; then
+        error_exit "Failed to retrieve the latest version from ${LATEST_VERSION_URL}"
     fi
+
+    LATEST_VERSION="${payload}"
     ohai "Latest version available: ${LATEST_VERSION}"
+}
+
+detect_webkit_version() {
+  check_pkgconfig_version() {
+    if command -v pkg-config >/dev/null 2>&1; then
+      if pkg-config --exists webkit2gtk-4.1; then
+        return 0
+      elif pkg-config --exists webkit2gtk-4.0; then
+        return 1
+      fi
+    fi
+    return 2
+  }
+
+  check_library_version() {
+    local lib_paths
+    lib_paths=$(find /usr/lib* /lib* -type f \( -name "libwebkit2gtk-4.1*.so*" -o -name "libwebkit2gtk-4.0*.so*" \) 2>/dev/null | sort -u)
+    if echo "$lib_paths" | grep -q "libwebkit2gtk-4.1"; then
+      return 0
+    elif echo "$lib_paths" | grep -q "libwebkit2gtk-4.0"; then
+      return 1
+    fi
+    return 2
+  }
+
+  if check_pkgconfig_version; then
+    DOWNLOAD_SUFFIX="-webkit241"
+    return 0
+  elif [[ $? -eq 1 ]]; then
+    DOWNLOAD_SUFFIX=""
+    return 0
+  fi
+
+  if check_library_version; then
+    DOWNLOAD_SUFFIX="-webkit241"
+    return 0
+  elif [[ $? -eq 1 ]]; then
+    DOWNLOAD_SUFFIX=""
+    return 0
+  fi
+
+  DOWNLOAD_SUFFIX=""
+  return 0
 }
 
 download_distribution() {
   # 5. Download and install
-    case "${OS}" in
-    Linux)
-      # Determine architecture for download
-      case "${ARCH}" in
-      x86_64)
-        DOWNLOAD_ARCH="x86-64"
-        ;;
-      aarch64)
-        DOWNLOAD_ARCH="aarch64"
-        ;;
-      *)
-        error_exit "Unsupported Linux architecture: ${ARCH}"
-        ;;
-      esac
-
-      # Determine WebKit dependency string for download based on distribution
-      # This is a simplification. A more robust solution might involve checking
-      # specific library versions or using a more sophisticated detection method.
-      WEBKIT_DOWNLOAD_SUFFIX=""
-      if [[ "${DISTRO}" == "debian" || "${DISTRO}" == "ubuntu" ]]; then
-        if version_ge "$VERSION" "22.04"; then
-          WEBKIT_DOWNLOAD_SUFFIX="webkit41"
-        else
-          WEBKIT_DOWNLOAD_SUFFIX="webkit40"
-        fi
-      elif [[ "${DISTRO}" == "fedora" || "${DISTRO}" == "centos" || "${DISTRO}" == "rhel" || "${DISTRO}" == "almalinux" || "${DISTRO}" == "rocky" ]]; then
-        WEBKIT_DOWNLOAD_SUFFIX="webkit40"
-      elif [[ "${DISTRO}" == "arch" ]]; then
-        WEBKIT_DOWNLOAD_SUFFIX="webkit41"
-      else
-        warn "Could not definitively determine WebKit suffix for distribution '${DISTRO}'. Defaulting to webkit41."
-        WEBKIT_DOWNLOAD_SUFFIX="webkit41"
-      fi
-
-      FILENAME="${APP_NAME}-linux-${DOWNLOAD_ARCH}-${WEBKIT_DOWNLOAD_SUFFIX}-${LATEST_VERSION}"
-      DOWNLOAD_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${LATEST_VERSION}/${FILENAME}"
+    case "${JOYDX_PLATFORM}" in
+    linux)
+      find_install_path
+      detect_webkit_version
+      FILENAME="${APP_NAME}-${JOYDX_PLATFORM}-${JOYDX_ARCHITECTURE}${DOWNLOAD_SUFFIX}"
+      DOWNLOAD_URL="${DOWNLOAD_URL_PREFIX}/${FILENAME}"
 
       ohai "Downloading ${FILENAME} to ${INSTALL_PATH}..."
       if retry 3 curl -L "${DOWNLOAD_URL}" -o "${INSTALL_PATH}/${APP_NAME}"; then
         execute chmod +x "${INSTALL_PATH}/${APP_NAME}"
         ohai "Installation complete. You can now run '${APP_NAME}' from your terminal."
+        create_desktop_entry
       else
         error_exit "Failed to download ${FILENAME} from ${DOWNLOAD_URL}"
       fi
       ;;
-    Darwin)
-      case "${ARCH}" in
-      x86_64)
-        DOWNLOAD_ARCH="x86-64"
-        ;;
-      aarch64)
-        DOWNLOAD_ARCH="aarch64"
-        ;;
-      *)
-        abort "Unsupported macOS architecture: ${ARCH}"
-        ;;
-      esac
+    darwin)
+      DOWNLOAD_SUFFIX=".zip"
+      FILENAME="${APP_NAME}-${JOYDX_PLATFORM}-${JOYDX_ARCHITECTURE}${DOWNLOAD_SUFFIX}"
+      DOWNLOAD_URL="${DOWNLOAD_URL_PREFIX}${LATEST_VERSION}/${FILENAME}"
+      ohai "Downloading ${DOWNLOAD_URL} to /tmp/${APP_NAME}.zip"
+      if retry 3 curl -L "${DOWNLOAD_URL}" -o "/tmp/${APP_NAME}.zip"; then
+        if [ ! -f "/tmp/${APP_NAME}.zip" ]; then
+          echo "Error: ZIP file not found at '/tmp/${APP_NAME}.zip'"
+          exit 1
+        fi
+        unzip -qq -o "/tmp/${APP_NAME}.zip" -d "/tmp/${APP_NAME}-install"
 
-      # For macOS, the download filename is simpler
-      FILENAME="${APP_NAME}-darwin-${DOWNLOAD_ARCH}-${LATEST_VERSION}"
-      DOWNLOAD_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${LATEST_VERSION}/${FILENAME}.tar.gz"
-      ohai "Downloading ${FILENAME}"
-      ohai "From ${DOWNLOAD_URL}"
-      if retry 3 curl -L "${DOWNLOAD_URL}" -o "$HOME/Downloads/${FILENAME}.tar.gz"; then
-        ohai "Download complete. To install, drag and drop '$HOME/Downloads/${FILENAME}' into your Applications folder."
-        ohai "You can find your Applications folder in Finder, usually on the left sidebar."
-        cd "$HOME/Downloads" || abort "cannot go to downloads path"
-        tar -xvf ${FILENAME}.tar.gz
-        mv  ${FILENAME} /Applications/joydx.app
+        mkdir -p "${HOME}/Applications"
+        cp -R /tmp/${APP_NAME}-install/${APP_NAME}.app "${HOME}"/Applications/${APP_NAME}.app
+
+        open "${HOME}"/Applications/${APP_NAME}.app
+
+        ohai "Installation to ${HOME}/Applications/${APP_NAME}.app complete"
       else
         error_exit "Failed to download ${FILENAME} from ${DOWNLOAD_URL}"
       fi
       ;;
     esac
+
 }
 
 main() {
   # Main script execution starts here
   detect_os_and_arch
   check_curl
-  find_install_path
   find_latest_version
   download_distribution
 
