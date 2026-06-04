@@ -345,7 +345,13 @@ download_distribution() {
 
       ohai "Downloading ${FILENAME} to ${INSTALL_PATH}..."
       mkdir -p "${INSTALL_PATH}"
-      if retry 3 download_file "${DOWNLOAD_URL}" "${INSTALL_PATH}/${APP_NAME}"; then
+      if retry 3 download_file "${DOWNLOAD_URL}" "/tmp/${APP_NAME}.zip"; then
+        if [ ! -f "/tmp/${APP_NAME}.zip" ]; then
+          echo "Error: ZIP file not found at '/tmp/${APP_NAME}.zip'"
+          exit 1
+        fi
+        unzip -qq -o "/tmp/${APP_NAME}.zip" -d "/tmp/${APP_NAME}-install"
+        mv "/tmp/${APP_NAME}-install/${APP_NAME}" "${INSTALL_PATH}/${APP_NAME}"
         chmod +x "${INSTALL_PATH}/${APP_NAME}"
         ohai "Installation complete. You can now run '${APP_NAME}' from your terminal."
         create_desktop_entry
