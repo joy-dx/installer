@@ -344,6 +344,7 @@ download_distribution() {
       DOWNLOAD_URL="${DOWNLOAD_URL_PREFIX}${FILENAME}"
 
       ohai "Downloading ${FILENAME} to ${INSTALL_PATH}..."
+      mkdir -p "${INSTALL_PATH}"
       if retry 3 download_file "${DOWNLOAD_URL}" "${INSTALL_PATH}/${APP_NAME}"; then
         chmod +x "${INSTALL_PATH}/${APP_NAME}"
         ohai "Installation complete. You can now run '${APP_NAME}' from your terminal."
