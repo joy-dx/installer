@@ -101,7 +101,7 @@ download_file() {
     curl -L "${url}" -o "${output}"
     ;;
   wget)
-    wget "${url}" -O "${output}"
+    wget -q --show-progress "${url}" -O "${output}"
     ;;
   *)
     error_exit "No supported downloader configured."
