@@ -4,12 +4,12 @@ set -u
 
 # Define variables
 APP_NAME="joydx"
-DOWNLOAD_URL_PREFIX="https://github.com/joy-dx/joydx-releases/releases/download/v"
-LATEST_VERSION_URL="https://joydx.com/latest-version"
+DOWNLOAD_URL_PREFIX="https://github.com/joy-dx/joydx-releases/releases/latest/download/"
 REMOTE_ICON_URL="https://joydx.com/icon-square.svg"
 JOYDX_PLATFORM=""
 JOYDX_ARCHITECTURE=""
 DOWNLOAD_SUFFIX=""
+DOWNLOAD_VARIANT=""
 
 # Fail fast with a concise message when not using bash
 # Single brackets are needed here for POSIX compatibility
@@ -56,6 +56,12 @@ major_minor() {
 
 chomp() {
   printf "%s" "${1/"$'\n'"/}"
+}
+
+# Function to display error and exit
+error_exit() {
+  printf "${tty_red}Error${tty_reset}: %s\n" "$(chomp "$1")" >&2
+  exit 1
 }
 
 ohai() {
@@ -193,24 +199,6 @@ check_curl() {
   fi
 }
 
-find_latest_version() {
-    ohai "Fetching latest version from ${LATEST_VERSION_URL}..."
-
-    # Fetch the JSON payload
-    local payload
-    payload=$(retry 3 curl -s "${LATEST_VERSION_URL}") || {
-        error_exit "Failed to retrieve data from ${LATEST_VERSION_URL}"
-    }
-
-    # Verify we got something
-    if [ -z "${payload}" ]; then
-        error_exit "Failed to retrieve the latest version from ${LATEST_VERSION_URL}"
-    fi
-
-    LATEST_VERSION="${payload}"
-    ohai "Latest version available: ${LATEST_VERSION}"
-}
-
 detect_webkit_version() {
   check_pkgconfig_version() {
     if command -v pkg-config >/dev/null 2>&1; then
@@ -235,47 +223,48 @@ detect_webkit_version() {
   }
 
   if check_pkgconfig_version; then
-    DOWNLOAD_SUFFIX="-webkit241"
+    DOWNLOAD_VARIANT="-webkit241"
     return 0
   elif [[ $? -eq 1 ]]; then
-    DOWNLOAD_SUFFIX=""
+    DOWNLOAD_VARIANT=""
     return 0
   fi
 
   if check_library_version; then
-    DOWNLOAD_SUFFIX="-webkit241"
+    DOWNLOAD_VARIANT="-webkit241"
     return 0
   elif [[ $? -eq 1 ]]; then
-    DOWNLOAD_SUFFIX=""
+    DOWNLOAD_VARIANT=""
     return 0
   fi
 
-  DOWNLOAD_SUFFIX=""
+  DOWNLOAD_VARIANT=""
   return 0
 }
 
 download_distribution() {
-  # 5. Download and install
+    DOWNLOAD_SUFFIX=".zip"
+
     case "${JOYDX_PLATFORM}" in
     linux)
       find_install_path
       detect_webkit_version
-      FILENAME="${APP_NAME}-${JOYDX_PLATFORM}-${JOYDX_ARCHITECTURE}${DOWNLOAD_SUFFIX}"
-      DOWNLOAD_URL="${DOWNLOAD_URL_PREFIX}/${FILENAME}"
+      FILENAME="${APP_NAME}-${JOYDX_PLATFORM}-${JOYDX_ARCHITECTURE}${DOWNLOAD_VARIANT}${DOWNLOAD_SUFFIX}"
+      DOWNLOAD_URL="${DOWNLOAD_URL_PREFIX}${FILENAME}"
 
       ohai "Downloading ${FILENAME} to ${INSTALL_PATH}..."
       if retry 3 curl -L "${DOWNLOAD_URL}" -o "${INSTALL_PATH}/${APP_NAME}"; then
         execute chmod +x "${INSTALL_PATH}/${APP_NAME}"
         ohai "Installation complete. You can now run '${APP_NAME}' from your terminal."
         create_desktop_entry
+        "${INSTALL_PATH}/${APP_NAME}" >/dev/null 2>&1 &
       else
         error_exit "Failed to download ${FILENAME} from ${DOWNLOAD_URL}"
       fi
       ;;
     darwin)
-      DOWNLOAD_SUFFIX=".zip"
       FILENAME="${APP_NAME}-${JOYDX_PLATFORM}-${JOYDX_ARCHITECTURE}${DOWNLOAD_SUFFIX}"
-      DOWNLOAD_URL="${DOWNLOAD_URL_PREFIX}${LATEST_VERSION}/${FILENAME}"
+      DOWNLOAD_URL="${DOWNLOAD_URL_PREFIX}${FILENAME}"
       ohai "Downloading ${DOWNLOAD_URL} to /tmp/${APP_NAME}.zip"
       if retry 3 curl -L "${DOWNLOAD_URL}" -o "/tmp/${APP_NAME}.zip"; then
         if [ ! -f "/tmp/${APP_NAME}.zip" ]; then
@@ -302,7 +291,6 @@ main() {
   # Main script execution starts here
   detect_os_and_arch
   check_curl
-  find_latest_version
   download_distribution
 
   ohai "Script finished successfully!"
