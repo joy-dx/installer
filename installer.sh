@@ -10,6 +10,7 @@ JOYDX_PLATFORM=""
 JOYDX_ARCHITECTURE=""
 DOWNLOAD_SUFFIX=""
 DOWNLOAD_VARIANT=""
+DOWNLOADER=""
 
 # Fail fast with a concise message when not using bash
 # Single brackets are needed here for POSIX compatibility
@@ -86,6 +87,23 @@ retry() {
     done
     error_exit "$(printf "Failed %d times doing: %s" "${tries}" "$(shell_join "$@")")"
   fi
+}
+
+download_file() {
+  local url="$1"
+  local output="$2"
+
+  case "${DOWNLOADER}" in
+  curl)
+    curl -L "${url}" -o "${output}"
+    ;;
+  wget)
+    wget "${url}" -O "${output}"
+    ;;
+  *)
+    error_exit "No supported downloader configured."
+    ;;
+  esac
 }
 
 create_desktop_entry() {
@@ -193,10 +211,16 @@ find_install_path() {
   ohai "Installation path: ${INSTALL_PATH}"
 }
 
-check_curl() {
-  if ! command -v curl &>/dev/null; then
-    error_exit "cURL is required to download the application. Please install it."
+check_downloader() {
+  if command -v curl >/dev/null 2>&1; then
+    DOWNLOADER="curl"
+  elif command -v wget >/dev/null 2>&1; then
+    DOWNLOADER="wget"
+  else
+    error_exit "Either cURL or wget is required to download the application. Please install one of them."
   fi
+
+  ohai "Using downloader: ${DOWNLOADER}"
 }
 
 detect_webkit_version() {
@@ -253,8 +277,8 @@ download_distribution() {
       DOWNLOAD_URL="${DOWNLOAD_URL_PREFIX}${FILENAME}"
 
       ohai "Downloading ${FILENAME} to ${INSTALL_PATH}..."
-      if retry 3 curl -L "${DOWNLOAD_URL}" -o "${INSTALL_PATH}/${APP_NAME}"; then
-        execute chmod +x "${INSTALL_PATH}/${APP_NAME}"
+      if retry 3 download_file "${DOWNLOAD_URL}" "${INSTALL_PATH}/${APP_NAME}"; then
+        chmod +x "${INSTALL_PATH}/${APP_NAME}"
         ohai "Installation complete. You can now run '${APP_NAME}' from your terminal."
         create_desktop_entry
         "${INSTALL_PATH}/${APP_NAME}" >/dev/null 2>&1 &
@@ -266,7 +290,7 @@ download_distribution() {
       FILENAME="${APP_NAME}-${JOYDX_PLATFORM}-${JOYDX_ARCHITECTURE}${DOWNLOAD_SUFFIX}"
       DOWNLOAD_URL="${DOWNLOAD_URL_PREFIX}${FILENAME}"
       ohai "Downloading ${DOWNLOAD_URL} to /tmp/${APP_NAME}.zip"
-      if retry 3 curl -L "${DOWNLOAD_URL}" -o "/tmp/${APP_NAME}.zip"; then
+      if retry 3 download_file "${DOWNLOAD_URL}" "/tmp/${APP_NAME}.zip"; then
         if [ ! -f "/tmp/${APP_NAME}.zip" ]; then
           echo "Error: ZIP file not found at '/tmp/${APP_NAME}.zip'"
           exit 1
@@ -290,7 +314,7 @@ download_distribution() {
 main() {
   # Main script execution starts here
   detect_os_and_arch
-  check_curl
+  check_downloader
   download_distribution
 
   ohai "Script finished successfully!"
