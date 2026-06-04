@@ -129,7 +129,7 @@ EOF
 
   # Make sure permissions are right
   chmod 644 "${DESKTOP_FILE}"
-  if retry 3 curl -L "${REMOTE_ICON_URL}" -o "${ICON_PATH}"; then
+  if retry 3 download_file "${REMOTE_ICON_URL}" "${ICON_PATH}"; then
     ohai "Icon Downloaded"
   else
     error_exit "Failed to download icon ${REMOTE_ICON_URL}"
