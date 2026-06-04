@@ -246,7 +246,7 @@ detect_os_and_arch() {
   x86_64)
     JOYDX_ARCHITECTURE="amd64"
     ;;
-  aarch64)
+  aarch64|arm64)
     JOYDX_ARCHITECTURE="arm64"
     ;;
   *)
