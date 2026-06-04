@@ -11,6 +11,9 @@ JOYDX_ARCHITECTURE=""
 DOWNLOAD_SUFFIX=""
 DOWNLOAD_VARIANT=""
 DOWNLOADER=""
+USER_SHELL=""
+SHELL_RC_FILE=""
+SHELL_EXPORT_SNIPPET=""
 
 # Fail fast with a concise message when not using bash
 # Single brackets are needed here for POSIX compatibility
@@ -143,6 +146,71 @@ EOF
   ohai "Desktop entry created at ${DESKTOP_FILE}"
 }
 
+detect_shell() {
+  local shell_name=""
+
+  if [[ -n "${SHELL:-}" ]]; then
+    shell_name="$(basename "${SHELL}")"
+  fi
+
+  case "${shell_name}" in
+  bash)
+    USER_SHELL="bash"
+    SHELL_RC_FILE="${HOME}/.bashrc"
+    SHELL_EXPORT_SNIPPET='export PATH="$HOME/.local/bin:$PATH"'
+    ;;
+  zsh)
+    USER_SHELL="zsh"
+    SHELL_RC_FILE="${HOME}/.zshrc"
+    SHELL_EXPORT_SNIPPET='export PATH="$HOME/.local/bin:$PATH"'
+    ;;
+  fish)
+    USER_SHELL="fish"
+    SHELL_RC_FILE="${HOME}/.config/fish/config.fish"
+    SHELL_EXPORT_SNIPPET='fish_add_path $HOME/.local/bin'
+    ;;
+  ksh)
+    USER_SHELL="ksh"
+    SHELL_RC_FILE="${HOME}/.kshrc"
+    SHELL_EXPORT_SNIPPET='export PATH="$HOME/.local/bin:$PATH"'
+    ;;
+  *)
+    USER_SHELL="sh"
+    SHELL_RC_FILE="${HOME}/.profile"
+    SHELL_EXPORT_SNIPPET='export PATH="$HOME/.local/bin:$PATH"'
+    ;;
+  esac
+
+  ohai "Detected shell: ${USER_SHELL}"
+  ohai "Shell config file: ${SHELL_RC_FILE}"
+}
+
+ensure_local_bin_in_shell_config() {
+  if [[ -z "${HOME:-}" ]]; then
+    error_exit "HOME environment variable is not set. Cannot update shell configuration."
+  fi
+
+  detect_shell
+
+  mkdir -p "${HOME}/.local/bin"
+  mkdir -p "$(dirname "${SHELL_RC_FILE}")"
+  touch "${SHELL_RC_FILE}"
+
+  if grep -Fqs "${SHELL_EXPORT_SNIPPET}" "${SHELL_RC_FILE}"; then
+    ohai "${HOME}/.local/bin already configured in ${SHELL_RC_FILE}"
+  else
+    {
+      printf "\n"
+      printf "# Added by %s installer\n" "${APP_NAME}"
+      printf "%s\n" "${SHELL_EXPORT_SNIPPET}"
+    } >> "${SHELL_RC_FILE}"
+    ohai "Added ${HOME}/.local/bin to PATH in ${SHELL_RC_FILE}"
+  fi
+
+  export PATH="${HOME}/.local/bin:$PATH"
+  ohai "Added ${HOME}/.local/bin to PATH for this session"
+}
+
 detect_os_and_arch() {
   OS=$(uname -s)
   ARCH=$(uname -m)
@@ -196,18 +264,17 @@ find_install_path() {
       INSTALL_PATH="$HOME/bin"
     elif [[ -d "$HOME/.local/bin" ]]; then
       INSTALL_PATH="$HOME/.local/bin"
-      warn "Adding $INSTALL_PATH to PATH for this session. You might want to add it permanently."
-      export PATH="$INSTALL_PATH:$PATH"
     elif [[ -d "$HOME/bin" ]]; then
       INSTALL_PATH="$HOME/bin"
-      warn "Adding $INSTALL_PATH to PATH for this session. You might want to add it permanently."
-      export PATH="$INSTALL_PATH:$PATH"
     else
-      error_exit "No suitable binary lookup folder found in your home directory (e.g., ~/.local/bin or ~/bin). Please create one and add it to your PATH."
+      warn "No suitable binary lookup folder found. Creating ${HOME}/.local/bin and updating your shell configuration."
+      ensure_local_bin_in_shell_config
+      INSTALL_PATH="$HOME/.local/bin"
     fi
   else
     error_exit "HOME environment variable is not set. Cannot determine a suitable installation path."
   fi
+  export PATH="$INSTALL_PATH:$PATH"
   ohai "Installation path: ${INSTALL_PATH}"
 }
 
