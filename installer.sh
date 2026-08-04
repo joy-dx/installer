@@ -224,7 +224,7 @@ detect_os_and_arch() {
     if [[ -f "/etc/os-release" ]]; then
       . /etc/os-release
       DISTRO=${ID}
-      VERSION=${VERSION_ID}
+      VERSION="${VERSION_ID:-rolling}"
       ohai "Detected Distribution: ${DISTRO}"
       ohai "Detected Version: ${VERSION}"
     else
@@ -340,7 +340,7 @@ download_distribution() {
     linux)
       find_install_path
       detect_webkit_version
-      FILENAME="${APP_NAME}-${JOYDX_PLATFORM}-${JOYDX_ARCHITECTURE}${DOWNLOAD_VARIANT}${DOWNLOAD_SUFFIX}"
+      FILENAME="${APP_NAME}-${JOYDX_PLATFORM}-${JOYDX_ARCHITECTURE}-webkit241${DOWNLOAD_SUFFIX}"
       DOWNLOAD_URL="${DOWNLOAD_URL_PREFIX}${FILENAME}"
 
       ohai "Downloading ${FILENAME} to ${INSTALL_PATH}..."
@@ -385,13 +385,20 @@ download_distribution() {
 
 }
 
+check_dependencies() {
+    case "${JOYDX_PLATFORM}" in
+    linux)
+        "${INSTALL_PATH}/${APP_NAME} deps"
+        ;;
+    esac
+}
+
 main() {
   # Main script execution starts here
   detect_os_and_arch
   check_downloader
   download_distribution
-
-  ohai "Script finished successfully!"
+  check_dependencies
 }
 
 main
